@@ -3,19 +3,13 @@ package ru.sibsutis.security;
 import org.apache.commons.cli.*;
 import ru.sibsutis.security.cli.CliOption;
 import ru.sibsutis.security.cli.CliProcessor;
-import ru.sibsutis.security.encrypt.CipherScheme;
-import ru.sibsutis.security.net.ShamirCommunicator;
+import ru.sibsutis.security.net.EntityFactory;
+import ru.sibsutis.security.net.Sender;
 
-import javax.naming.OperationNotSupportedException;
-import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
-import java.io.IOException;
-
-import static java.nio.charset.StandardCharsets.UTF_8;
+import java.io.FileOutputStream;
 
 public class Cryptor {
-
-    private static final int CERTAINTY = 100;
 
     public static void main(String[] args) {
         CommandLineParser parser = new DefaultParser(true);
@@ -25,64 +19,49 @@ public class Cryptor {
             CommandLine commandLine = parser.parse(options, args);
             CliProcessor cliProcessor = new CliProcessor(commandLine);
 
-            try (ByteArrayInputStream messageStream = cliProcessor.getMessageStream()) {
-                if (messageStream == null) {
-                    showHelp(options);
-                    return;
-                }
+            if (cliProcessor.isNeedHelp()) {
+                showHelp(options);
+                return;
+            }
 
-                try (ByteArrayOutputStream sentMessageStream = sendMessage(
-                        messageStream,
-                        cliProcessor,
-                        options)) {
-                    System.out.printf("Sent message: %s", sentMessageStream.toString(UTF_8.toString()));
-                } catch (Exception e) {
-                    System.out.println("Not encrypted");
-                    if (cliProcessor.isVerbose()) {
-                        e.printStackTrace();
-                    }
+            boolean isVerbose = cliProcessor.isVerbose();
+
+            Sender sender;
+
+            try { // Send message
+                EntityFactory entityFactory = new EntityFactory(cliProcessor);
+                sender = Sender.builder()
+                        .setNeedDigest(cliProcessor.isNeedDigest())
+                        .setVerbose(isVerbose)
+                        .build(entityFactory);
+                sender.send(cliProcessor.getMessageStream());
+            } catch (Exception ex) {
+                System.out.println("Cryptor: Cannot send message");
+                if (isVerbose) {
+                    ex.printStackTrace();
                 }
-            } catch (IOException e) {
-                System.out.println("Cannot close message input stream");
-                if (cliProcessor.isVerbose()) {
-                    e.printStackTrace();
+                return;
+            }
+
+            // Check out delivered message
+            try (FileOutputStream outputStream = cliProcessor.getOutputFileStream()) {
+                ByteArrayOutputStream deliveredMessageStream = sender.getSentMessageStream();
+                if (outputStream != null) {
+                    deliveredMessageStream.writeTo(outputStream);
+                } else {
+                    System.out.printf(
+                            "Cryptor: Sent message: %s",
+                            deliveredMessageStream.toString("UTF-8")
+                    );
+                }
+            } catch (Exception ex) {
+                System.out.println("Cryptor: Cannot check out delivered message");
+                if (isVerbose) {
+                    ex.printStackTrace();
                 }
             }
         } catch (ParseException e) {
             showHelp(options);
-        }
-    }
-
-    private static ByteArrayOutputStream sendMessage(
-            ByteArrayInputStream message,
-            CliProcessor cliProcessor,
-            Options options) throws OperationNotSupportedException {
-        CipherScheme cipherScheme = cliProcessor.getCipherScheme();
-        switch (cipherScheme) {
-            case SHAMIR:
-                int pLength = cliProcessor.getSPLength();
-                if (pLength < 0) {
-                    showHelp(options);
-                    throw new IllegalStateException("Incorrect parameters");
-                }
-                boolean isNeedSign = cliProcessor.isNeedSign();
-                ShamirCommunicator client = new ShamirCommunicator(pLength);
-                ShamirCommunicator server = new ShamirCommunicator(pLength);
-                if (isNeedSign) {
-
-                }
-                client.sendMessage(message, server);
-                if (server.hasMessageGot()) {
-                    return server.getMessageStream();
-                } else {
-                    throw new IllegalStateException("Cannot send message to server");
-                }
-            case DIFFIE_HELLMAN:
-                // TODO realize Diffie Hellman sending scheme
-            default:
-                throw new OperationNotSupportedException(
-                        String.format("Scheme %s not realized", cipherScheme.getCode())
-                );
         }
     }
 

@@ -2,10 +2,13 @@ package ru.sibsutis.security.cli;
 
 import org.apache.commons.cli.CommandLine;
 import org.apache.commons.io.FileUtils;
-import ru.sibsutis.security.encrypt.CipherScheme;
+import ru.sibsutis.security.net.CipherScheme;
+import ru.sibsutis.security.net.SignatureScheme;
 
 import java.io.ByteArrayInputStream;
+import java.io.FileOutputStream;
 import java.io.IOException;
+import java.nio.ByteBuffer;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 
@@ -23,25 +26,24 @@ public class CliProcessor {
         if (commandLine.hasOption(CliOption.MESSAGE.getOption())) {
             String message = commandLine.getOptionValue(CliOption.MESSAGE.getOption());
             if (isVerbose()) {
-                System.out.printf("Source message: %s%n", message);
+                System.out.printf("Cryptor: source message '%s'%n", message);
             }
-            byte[] bytes = message.getBytes(UTF_8);
-            return new ByteArrayInputStream(bytes);
+            byte[] messageBytes = message.getBytes(UTF_8);
+            return bytesToInputStream(messageBytes);
         }
 
         if (commandLine.hasOption(CliOption.FILE.getOption())) {
             String fileName = commandLine.getOptionValue(CliOption.FILE.getOption());
             Path fileToEncryptionPath = Paths.get(fileName).toAbsolutePath();
             try {
-                ByteArrayInputStream result = new ByteArrayInputStream(
-                        FileUtils.readFileToByteArray(fileToEncryptionPath.toFile())
-                );
+                byte[] messageBytes = FileUtils.readFileToByteArray(fileToEncryptionPath.toFile());
+                ByteArrayInputStream result = bytesToInputStream(messageBytes);
                 if (isVerbose()) {
-                    System.out.printf("Source message (file): %s%n", fileToEncryptionPath);
+                    System.out.printf("Cryptor: source message file '%s'%n", fileToEncryptionPath);
                 }
                 return result;
             } catch (IOException e) {
-                System.out.printf("Cannot read message from file %s%n", fileName);
+                System.out.printf("Cryptor: cannot read message from file '%s'%n", fileName);
                 if (commandLine.hasOption(CliOption.VERBOSE.getOption())) {
                     e.printStackTrace();
                 }
@@ -59,46 +61,66 @@ public class CliProcessor {
         if (commandLine.hasOption(CliOption.CYPHER.getOption())) {
             String cipherCode = commandLine.getOptionValue(CliOption.CYPHER.getOption());
             try {
-                CipherScheme cipherScheme = CipherScheme.fromCode(cipherCode);
-                if (isVerbose()) {
-                    System.out.printf("Cipher scheme: %s%n", cipherScheme.getCode());
-                }
-                return cipherScheme;
+                return CipherScheme.fromCode(cipherCode);
             } catch (Exception ex) {
-                System.out.printf("Unknown cipher scheme: %s%n", cipherCode);
+                System.out.printf("Cryptor: unknown cipher scheme '%s'%n", cipherCode);
                 if (isVerbose()) {
                     ex.printStackTrace();
                 }
             }
         }
-        if (isVerbose()) {
-            System.out.printf("Cipher scheme: %s%n", CipherScheme.SHAMIR.getCode());
-        }
         return CipherScheme.SHAMIR;
     }
 
-    public int getPLength() {
-        int pLength = getIntValue(CliOption.DIFFIE_HELLMAN_P_LENGTH, 1);
-        return pLength < 1 ? -1 : pLength;
-    }
-
-    public int getQLength() {
-        int qLength = getIntValue(CliOption.DIFFIE_HELLMAN_Q_LENGTH, 1);
-        return qLength < 1 ? -1 : qLength;
-    }
-
-    public int getBValue() {
-        int bValue = getIntValue(CliOption.DIFFIE_HELLMAN_B_VALUE, 2);
-        return bValue < 2 ? -1 : bValue;
-    }
-
-    public boolean isNeedSign() {
+    public boolean isNeedDigest() {
         return commandLine.hasOption(CliOption.SIGNATURE.getOption());
+    }
+
+    public SignatureScheme getSignature() {
+        if (isNeedDigest()) {
+            return SignatureScheme.fromCode(commandLine.getOptionValue(CliOption.SIGNATURE.getOption()));
+        } else {
+            return null;
+        }
     }
 
     public int getSPLength() {
         int pLength = getIntValue(CliOption.SHAMIR_P_LENGTH, 1);
         return pLength < 1 ? -1 : pLength;
+    }
+
+    public FileOutputStream getOutputFileStream() {
+        if (commandLine.hasOption(CliOption.OUTPUT.getOption())) {
+            String fileName = commandLine.getOptionValue(CliOption.OUTPUT.getOption());
+            Path outputFilePath = Paths.get(fileName).toAbsolutePath();
+            try {
+                FileOutputStream result = new FileOutputStream(outputFilePath.toString());
+                if (isVerbose()) {
+                    System.out.printf("Cryptor: output message file '%s'%n", outputFilePath);
+                }
+                return result;
+            } catch (IOException e) {
+                System.out.printf("Cryptor: cannot write message to file '%s'%n", fileName);
+                if (commandLine.hasOption(CliOption.VERBOSE.getOption())) {
+                    e.printStackTrace();
+                }
+            }
+        }
+        return null;
+    }
+
+    public int getGostQLength() {
+        int qLength = getIntValue(CliOption.GOST_Q_LENGTH, 1);
+        return qLength < 1 ? -1 : qLength;
+    }
+
+    public int getGostPLength() {
+        int pLength = getIntValue(CliOption.GOST_P_LENGTH, 1);
+        return pLength < 1 ? -1 : pLength;
+    }
+
+    public boolean isNeedHelp() {
+        return commandLine.hasOption(CliOption.HELP.getOption());
     }
 
     private int getIntValue(CliOption option, int minValue) {
@@ -108,19 +130,16 @@ public class CliProcessor {
                 int value = Integer.parseInt(valueString);
                 if (value < minValue) {
                     System.out.printf(
-                            "Incorrect %s value: %s",
+                            "Cryptor: incorrect %s value: %s",
                             option.getOption().getLongOpt(),
                             valueString
                     );
                     return minValue - 1;
                 }
-                if (isVerbose()) {
-                    System.out.printf("%s: %s%n", option.getOption().getLongOpt(), valueString);
-                }
                 return value;
             } catch (Exception ex) {
                 System.out.printf(
-                        "Incorrect %s value: %s",
+                        "Cryptor: incorrect %s value: %s",
                         option.getOption().getLongOpt(),
                         valueString
                 );
@@ -130,6 +149,15 @@ public class CliProcessor {
             }
         }
         return minValue - 1;
+    }
+
+    private ByteArrayInputStream bytesToInputStream(byte[] bytes) {
+        byte[] bytesWithSize = ByteBuffer
+                .allocate(4 + bytes.length)
+                .putInt(bytes.length)
+                .put(bytes)
+                .array();
+        return new ByteArrayInputStream(bytesWithSize);
     }
 
 }

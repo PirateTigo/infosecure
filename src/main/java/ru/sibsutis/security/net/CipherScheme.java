@@ -1,8 +1,7 @@
-package ru.sibsutis.security.encrypt;
+package ru.sibsutis.security.net;
 
 public enum CipherScheme {
-    SHAMIR("sha"),
-    DIFFIE_HELLMAN("dh");
+    SHAMIR("sha");
 
     private final String code;
 

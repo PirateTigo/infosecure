@@ -1,35 +1,84 @@
 package ru.sibsutis.security.encrypt;
 
+import com.google.common.math.BigIntegerMath;
 import org.apache.commons.lang3.tuple.ImmutablePair;
-import org.apache.commons.lang3.tuple.ImmutableTriple;
 import org.apache.commons.lang3.tuple.Pair;
-import org.apache.commons.lang3.tuple.Triple;
 
 import java.math.BigInteger;
-import java.util.Random;
+import java.math.RoundingMode;
+import java.security.SecureRandom;
+
+import static java.math.BigInteger.ONE;
+import static java.math.BigInteger.ZERO;
 
 public final class CryptoUtils {
 
-    private static final long WAIT_TIMEOUT = 5000L; // 5 seconds
+    private static final long WAIT_TIMEOUT_10000 = 10000L; // 10 seconds
+    private static final long WAIT_TIMEOUT_100 = 100L; // 100 ms
+
+    private static final int MAX_BIT_COUNT = 1024;
+
+    private static final BigInteger TWO = ONE.add(ONE);
+
+    private static final int CERTAINTY = 100;
 
     private CryptoUtils() {}
 
-    public static BigInteger secretKey(BigInteger fromPrivateKey, BigInteger toPublicKey, BigInteger module) {
-        return toPublicKey.modPow(fromPrivateKey, module);
+    public static BigInteger generateRandom(int pLength, boolean prime) {
+        SecureRandom random = new SecureRandom();
+        if (prime) {
+            return BigInteger.probablePrime(pLength, random);
+        } else {
+            return new BigInteger(pLength, random);
+        }
     }
 
-    public static BigInteger generateRandomPrime(int pLength, int minValue) {
+    public static BigInteger generateRandom(BigInteger minValue, BigInteger maxValue, boolean prime) {
         long timeMark = System.currentTimeMillis();
-        Random random = new Random(timeMark);
+        SecureRandom random = new SecureRandom();
         BigInteger p;
-        BigInteger minValueBI = BigInteger.valueOf(minValue);
+        int minValueLength;
+
+        if (minValue.compareTo(ZERO) < 0) {
+            minValueLength = 0;
+        } else {
+            minValueLength = BigIntegerMath.log2(minValue, RoundingMode.FLOOR) + 1;
+        }
+
+        int maxValueLength;
+        if (maxValue.compareTo(ZERO) < 0) {
+            maxValueLength = 0;
+        } else {
+            maxValueLength = BigIntegerMath.log2(maxValue, RoundingMode.FLOOR) + 1;
+        }
+        if (minValueLength != 0 && maxValueLength != 0 && minValue.compareTo(maxValue) > 0) {
+            return null;
+        } else if (minValueLength == 0 && maxValueLength == 0) {
+            return null;
+        }
+        int realLength;
 
         while (true) {
-            if (System.currentTimeMillis() - timeMark > WAIT_TIMEOUT) {
-                throw new IllegalStateException("Shamir scheme waiting time out");
+            if (System.currentTimeMillis() - timeMark > WAIT_TIMEOUT_10000) {
+                throw new IllegalStateException("Random prime waiting time out");
             }
-            p = BigInteger.probablePrime(pLength, random);
-            if (p.compareTo(minValueBI) < 0) {
+            if (minValueLength == maxValueLength) {
+                realLength = minValueLength;
+            } else {
+                if (maxValueLength == 0 || maxValueLength > MAX_BIT_COUNT) {
+                    realLength = minValueLength + random.nextInt(MAX_BIT_COUNT - minValueLength);
+                } else {
+                    realLength = minValueLength + random.nextInt(maxValueLength - minValueLength);
+                }
+                if (realLength < 2) {
+                    continue;
+                }
+            }
+            p = generateRandom(realLength, prime);
+            if (minValue.compareTo(ZERO) >= 0 && p.compareTo(minValue) < 0) {
+                continue;
+            }
+            if (maxValue.compareTo(ZERO) >= 0 && p.compareTo(maxValue) > 0) {
                 continue;
             }
             break;
@@ -38,21 +87,19 @@ public final class CryptoUtils {
     }
 
     public static Pair<BigInteger, BigInteger> generateShamir(BigInteger p) {
-        BigInteger one = new BigInteger("1");
-        BigInteger pMinusOne = p.subtract(one);
+        BigInteger pMinusOne = p.subtract(ONE);
 
         BigInteger c;
         BigInteger d;
 
         long timeMark = System.currentTimeMillis();
-        Random random = new Random(timeMark);
 
         while (true) {
-            if (System.currentTimeMillis() - timeMark > WAIT_TIMEOUT) {
+            if (System.currentTimeMillis() - timeMark > WAIT_TIMEOUT_10000) {
                 throw new IllegalStateException("Shamir scheme waiting time out");
             }
-            c = new BigInteger(pMinusOne.bitLength(), random);
-            if (!c.gcd(pMinusOne).equals(one)) {
+            c = generateRandom(pMinusOne.bitLength(), false);
+            if (!c.gcd(pMinusOne).equals(ONE)) {
                 continue;
             }
             d = c.modInverse(pMinusOne);
@@ -61,50 +108,61 @@ public final class CryptoUtils {
         return new ImmutablePair<>(c, d);
     }
 
-    public static Triple<BigInteger, BigInteger, BigInteger> generateDiffieHellman(
-            int qLength,
-            int pLength,
-            int b,
-            int certainty) {
-        BigInteger p;
+    public static Pair<Pair<BigInteger, BigInteger>, Pair<BigInteger, BigInteger>>
+    generateGOSTParameters(int pLength, int qLength) {
+        BigInteger b;
+        BigInteger a;
+        BigInteger p = null;
         BigInteger q;
-        BigInteger g;
 
-        BigInteger one = new BigInteger("1");
-        BigInteger bValue = new BigInteger(String.valueOf(b));
-        BigInteger pMinusOne;
-
-        Random random = new Random(System.currentTimeMillis());
-        long timeMark = System.currentTimeMillis();
+        boolean found;
+        long timeMarkCommon = System.currentTimeMillis();
 
         while (true) {
-            if (System.currentTimeMillis() - timeMark > WAIT_TIMEOUT) {
-                throw new IllegalStateException("Diffie Hellman scheme waiting time out");
+            if (System.currentTimeMillis() - timeMarkCommon > WAIT_TIMEOUT_10000) {
+                throw new IllegalStateException("GOST parameters waiting time out");
             }
-            q = BigInteger.probablePrime(qLength, random);
-            p = q.multiply(bValue).add(one);
-            if (!p.isProbablePrime(certainty)) {
-                continue;
+            q = generateRandom(qLength, true);
+            found = false;
+            b = TWO;
+            while (b.multiply(q).bitLength() < pLength) {
+                b = b.multiply(TWO);
             }
-            pMinusOne = p.subtract(one);
-
-            while (true) {
-                if (System.currentTimeMillis() - timeMark > WAIT_TIMEOUT) {
-                    throw new IllegalStateException("Diffie Hellman waiting time out");
+            BigInteger testExpression = b.multiply(q).add(ONE);
+            while (testExpression.bitLength() == pLength) {
+                if (testExpression.isProbablePrime(CERTAINTY)) {
+                    found = true;
+                    p = testExpression;
+                    break;
                 }
-                g = new BigInteger(pLength - 1, random);
-                if (one.compareTo(g) < 0
-                        && g.compareTo(pMinusOne) < 0
-                        && !(g.modPow(q, p).equals(one))) {
-                    // g has found
+                b = b.add(ONE);
+                testExpression = b.multiply(q).add(ONE);
+            }
+            if (found) {
+                BigInteger g;
+                a = TWO;
+                found = false;
+                long timeMarkForA = System.currentTimeMillis();
+                BigInteger pMinusOnePerQ = p.subtract(ONE).divide(q);
+
+                while (true) {
+                    if (System.currentTimeMillis() - timeMarkForA > WAIT_TIMEOUT_100) {
+                        break;
+                    }
+                    g = generateRandom(pLength, false);
+                    a = g.modPow(pMinusOnePerQ, p);
+                    if (a.compareTo(ONE) > 0) {
+                        found = true;
+                        break;
+                    }
+                }
+                if (found) {
                     break;
                 }
             }
-            // p and q have found
-            break;
         }
 
-        return new ImmutableTriple<>(p, q, g);
+        return new ImmutablePair<>(new ImmutablePair<>(p, q), new ImmutablePair<>(b, a));
     }
 
 }
