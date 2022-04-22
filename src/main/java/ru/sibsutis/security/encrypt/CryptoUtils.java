@@ -143,14 +143,13 @@ public final class CryptoUtils {
                 a = TWO;
                 found = false;
                 long timeMarkForA = System.currentTimeMillis();
-                BigInteger pMinusOnePerQ = p.subtract(ONE).divide(q);
 
                 while (true) {
                     if (System.currentTimeMillis() - timeMarkForA > WAIT_TIMEOUT_100) {
                         break;
                     }
                     g = generateRandom(pLength, false);
-                    a = g.modPow(pMinusOnePerQ, p);
+                    a = g.modPow(b, p);
                     if (a.compareTo(ONE) > 0) {
                         found = true;
                         break;
